@@ -62,7 +62,8 @@ func main() {
 		go func() {
 			resp, err := http.DefaultClient.Do(&req_a)
 			if err != nil {
-				log.Printf("request to %s failed: %s", targets[0], err)
+				close(cancel_a)
+				log.Printf("target 1 failed: %s", err)
 				return
 			}
 
@@ -72,7 +73,8 @@ func main() {
 		go func() {
 			resp, err := http.DefaultClient.Do(&req_b)
 			if err != nil {
-				log.Printf("request to %s failed: %s", targets[1], err)
+				close(cancel_b)
+				log.Printf("target 2 failed: %s", err)
 				return
 			}
 
@@ -106,6 +108,7 @@ func main() {
 		io.Copy(w, resp.Body)
 	})
 
+	log.Printf("listening on %s", listen)
 	err := http.ListenAndServe(listen, nil)
 	if err != nil {
 		fmt.Println(err)
