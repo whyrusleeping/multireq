@@ -31,12 +31,6 @@ func main() {
 		a := make(chan *http.Response)
 		b := make(chan *http.Response)
 
-		allowedCodes := map[int]bool{
-			200: true,
-			304: true,
-			302: true,
-		}
-
 		r.RequestURI = ""
 		req_a := *r
 		req_b := *r
@@ -97,13 +91,13 @@ func main() {
 			return
 		}
 
-		if allowedCodes[resp.StatusCode] {
-			close(cancel_a)
-			for k, v := range resp.Header {
-				w.Header()[k] = v
-			}
-		} else {
+		if resp.StatusCode >= 400 {
 			return
+		}
+
+		close(cancel_a)
+		for k, v := range resp.Header {
+			w.Header()[k] = v
 		}
 		io.Copy(w, resp.Body)
 	})
