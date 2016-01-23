@@ -27,25 +27,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	ua, err := url.Parse(targets[0])
+	if err != nil {
+		panic(err)
+	}
+	ub, err := url.Parse(targets[1])
+	if err != nil {
+		panic(err)
+	}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		a := make(chan *http.Response)
 		b := make(chan *http.Response)
 
 		r.RequestURI = ""
+		r.URL.Scheme = "http"
 		req_a := *r
 		req_b := *r
-
-		ua, err := url.Parse(targets[0])
-		if err != nil {
-			panic(err)
-		}
-		ub, err := url.Parse(targets[1])
-		if err != nil {
-			panic(err)
-		}
-
-		req_a.URL = ua
-		req_b.URL = ub
+		req_a.URL, _ = url.Parse(r.URL.String())
+		req_a.URL.Host = ua.Host
+		req_b.URL, _ = url.Parse(r.URL.String())
+		req_b.URL.Host = ub.Host
 
 		cancel_a := make(chan struct{})
 		cancel_b := make(chan struct{})
@@ -56,7 +58,6 @@ func main() {
 		go func() {
 			resp, err := http.DefaultClient.Do(&req_a)
 			if err != nil {
-				close(cancel_a)
 				log.Printf("target 1 failed: %s", err)
 				return
 			}
@@ -67,7 +68,6 @@ func main() {
 		go func() {
 			resp, err := http.DefaultClient.Do(&req_b)
 			if err != nil {
-				close(cancel_b)
 				log.Printf("target 2 failed: %s", err)
 				return
 			}
@@ -85,17 +85,19 @@ func main() {
 		var resp *http.Response
 		select {
 		case resp = <-a:
+			if resp.StatusCode < 400 {
+				close(cancel_b)
+			}
 		case resp = <-b:
+			if resp.StatusCode < 400 {
+				close(cancel_a)
+			}
 		case <-failed:
 			w.WriteHeader(404)
 			return
 		}
 
-		if resp.StatusCode >= 400 {
-			return
-		}
-
-		close(cancel_a)
+		w.WriteHeader(resp.StatusCode)
 		for k, v := range resp.Header {
 			w.Header()[k] = v
 		}
@@ -103,7 +105,7 @@ func main() {
 	})
 
 	log.Printf("listening on %s", listen)
-	err := http.ListenAndServe(listen, nil)
+	err = http.ListenAndServe(listen, nil)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
