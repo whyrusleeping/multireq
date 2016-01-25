@@ -83,13 +83,17 @@ func main() {
 		}()
 
 		var resp *http.Response
+		var respa *http.Response
+		var respb *http.Response
 		select {
-		case resp = <-a:
-			if resp.StatusCode < 400 {
+		case respa = <-a:
+			if respa.StatusCode < 400 {
+				resp = respa
 				close(cancel_b)
 			}
-		case resp = <-b:
-			if resp.StatusCode < 400 {
+		case respb = <-b:
+			if respb.StatusCode < 400 {
+				resp = respb
 				close(cancel_a)
 			}
 		case <-failed:
