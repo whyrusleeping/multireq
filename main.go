@@ -95,7 +95,7 @@ func main() {
 				close(cancel_a)
 			}
 		case <-failed:
-			w.WriteHeader(404)
+			w.WriteHeader(503)
 			return
 		}
 
