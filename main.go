@@ -56,7 +56,8 @@ func main() {
 		req_b.Cancel = cancel_b
 
 		go func() {
-			resp, err := http.DefaultClient.Do(&req_a)
+			rt := &http.Transport{DisableKeepAlives: true}
+			resp, err := rt.RoundTrip(&req_a)
 			if err != nil {
 				log.Printf("target 1 failed: %s", err)
 				return
@@ -66,7 +67,8 @@ func main() {
 		}()
 
 		go func() {
-			resp, err := http.DefaultClient.Do(&req_b)
+			rt := &http.Transport{DisableKeepAlives: true}
+			resp, err := rt.RoundTrip(&req_a)
 			if err != nil {
 				log.Printf("target 2 failed: %s", err)
 				return
