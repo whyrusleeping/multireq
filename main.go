@@ -12,7 +12,7 @@ import (
 
 func main() {
 	if len(os.Args) != 4 {
-		fmt.Println("usage: multireq <listen addr> <target 1> <target 2>")
+		fmt.Println("usage: multireq <listen addr> <target A> <target B>")
 		os.Exit(1)
 	}
 
@@ -37,64 +37,93 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		a := make(chan *http.Response)
-		b := make(chan *http.Response)
+		resp_a := make(chan *http.Response)
+		resp_b := make(chan *http.Response)
 
-		r.RequestURI = ""
-		r.URL.Scheme = "http"
-		req_a := *r
-		req_b := *r
-		req_a.URL, _ = url.Parse(r.URL.String())
-		req_a.URL.Host = ua.Host
-		req_b.URL, _ = url.Parse(r.URL.String())
-		req_b.URL.Host = ub.Host
+		fail_a := make(chan struct{})
+		fail_b := make(chan struct{})
+		fail := make(chan struct{})
 
 		cancel_a := make(chan struct{})
 		cancel_b := make(chan struct{})
 
-		req_a.Cancel = cancel_a
-		req_b.Cancel = cancel_b
+		r.RequestURI = ""
+		r.URL.Scheme = "http"
 
 		go func() {
+			req_a := *r
+			req_a.URL.Host = ua.Host
+			req_a.URL, _ = url.Parse(r.URL.String())
+			req_a.Cancel = cancel_a
+
 			rt := &http.Transport{DisableKeepAlives: true}
 			resp, err := rt.RoundTrip(&req_a)
 			if err != nil {
-				log.Printf("target 1 failed: %s", err)
-				return
+				log.Printf("target A failed: %s", err)
+				close(fail_a)
+			} else if resp.StatusCode >= 400 {
+				log.Printf("target A unsatisfying status: %d", resp.StatusCode)
+				close(fail_a)
+			} else {
+				resp_a <- resp
 			}
-
-			a <- resp
 		}()
 
 		go func() {
+			req_b := *r
+			req_b.URL, _ = url.Parse(r.URL.String())
+			req_b.URL.Host = ub.Host
+			req_b.Cancel = cancel_b
+
 			rt := &http.Transport{DisableKeepAlives: true}
-			resp, err := rt.RoundTrip(&req_a)
+			resp, err := rt.RoundTrip(&req_b)
 			if err != nil {
-				log.Printf("target 2 failed: %s", err)
-				return
+				log.Printf("target B failed: %s", err)
+				close(fail_b)
+			} else if resp.StatusCode >= 400 {
+				log.Printf("target B unsatisfying status: %d", resp.StatusCode)
+				close(fail_b)
+			} else {
+				resp_b <- resp
 			}
-
-			b <- resp
 		}()
 
-		failed := make(chan struct{})
 		go func() {
-			<-cancel_a
-			<-cancel_b
-			close(failed)
+			<-fail_a
+			<-fail_b
+			close(fail)
 		}()
 
+		var ra *http.Response
+		var rb *http.Response
 		var resp *http.Response
-		select {
-		case resp = <-a:
-			if resp.StatusCode < 400 {
-				close(cancel_b)
+		done := false
+	OuterLoop:
+		for {
+			select {
+			case ra = <-resp_a:
+				if !done {
+					done = true
+					resp = ra
+					log.Print("close cancel_b")
+					close(cancel_b)
+					break OuterLoop
+				}
+			case rb = <-resp_b:
+				if !done {
+					done = true
+					resp = rb
+					log.Print("close cancel_a")
+					close(cancel_a)
+					break OuterLoop
+				}
+			case <-fail:
+				log.Print("both failed")
+				break OuterLoop
 			}
-		case resp = <-b:
-			if resp.StatusCode < 400 {
-				close(cancel_a)
-			}
-		case <-failed:
+		}
+
+		if !done {
 			w.WriteHeader(503)
 			return
 		}
@@ -103,7 +132,11 @@ func main() {
 			w.Header()[k] = v
 		}
 		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
+		written, err := io.Copy(w, resp.Body)
+		if err != nil {
+			log.Printf("io.Copy error: %s", err)
+		}
+		log.Printf("io.Copy %d bytes written", written)
 	})
 
 	log.Printf("listening on %s", listen)
