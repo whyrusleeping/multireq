@@ -61,7 +61,7 @@ func main() {
 			if err != nil {
 				log.Printf("target A failed: %s", err)
 				close(fail_a)
-			} else if resp.StatusCode >= 400 {
+			} else if resp.StatusCode >= 500 || resp.StatusCode == 408 {
 				log.Printf("target A unsatisfying status: %d", resp.StatusCode)
 				close(fail_a)
 			} else {
@@ -80,7 +80,7 @@ func main() {
 			if err != nil {
 				log.Printf("target B failed: %s", err)
 				close(fail_b)
-			} else if resp.StatusCode >= 400 {
+			} else if resp.StatusCode >= 500 || resp.StatusCode == 408 {
 				log.Printf("target B unsatisfying status: %d", resp.StatusCode)
 				close(fail_b)
 			} else {
