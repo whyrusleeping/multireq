@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -28,6 +29,10 @@ func forwardRequest(r *http.Request, target *url.URL, out chan *http.Response, c
 	if resp.StatusCode >= 500 || resp.StatusCode == 408 {
 		log.Printf("target %s unsatisfying status: %d", target, resp.StatusCode)
 		close(fail)
+
+		// read entire body and close
+		io.Copy(ioutil.Discard, resp.Body)
+		resp.Body.Close()
 		return
 	}
 
@@ -80,6 +85,8 @@ func (mr *MultiReq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header()[k] = v
 	}
 	w.WriteHeader(resp.StatusCode)
+
+	defer resp.Body.Close()
 	written, err := io.Copy(w, resp.Body)
 	if err != nil {
 		log.Printf("io.Copy error: %s", err)
