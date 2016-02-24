@@ -10,6 +10,30 @@ import (
 	"strings"
 )
 
+func forwardRequest(r *http.Request, target *url.URL, out chan *http.Response, cancel chan struct{}, fail chan struct{}) {
+	req_a := *r
+	req_a.URL, _ = url.Parse(r.URL.String())
+	req_a.URL.Host = target.Host
+	req_a.Cancel = cancel
+
+	req_a.Close = true
+	rt := &http.Transport{DisableKeepAlives: true}
+	resp, err := rt.RoundTrip(&req_a)
+	if err != nil {
+		log.Printf("target %s failed: %s", target, err)
+		close(fail)
+		return
+	}
+
+	if ra.StatusCode >= 500 || ra.StatusCode == 408 {
+		log.Printf("target %s unsatisfying status: %d", target, ra.StatusCode)
+		close(fail)
+		return
+	}
+
+	out <- resp
+}
+
 func main() {
 	if len(os.Args) != 4 {
 		fmt.Println("usage: multireq <listen addr> <target A> <target B>")
@@ -50,43 +74,8 @@ func main() {
 		r.RequestURI = ""
 		r.URL.Scheme = "http"
 
-		go func() {
-			req_a := *r
-			req_a.URL.Host = ua.Host
-			req_a.URL, _ = url.Parse(r.URL.String())
-			req_a.Cancel = cancel_a
-
-			rt := &http.Transport{DisableKeepAlives: true}
-			resp, err := rt.RoundTrip(&req_a)
-			if err != nil {
-				log.Printf("target A failed: %s", err)
-				close(fail_a)
-			} else if resp.StatusCode >= 500 || resp.StatusCode == 408 {
-				log.Printf("target A unsatisfying status: %d", resp.StatusCode)
-				close(fail_a)
-			} else {
-				resp_a <- resp
-			}
-		}()
-
-		go func() {
-			req_b := *r
-			req_b.URL, _ = url.Parse(r.URL.String())
-			req_b.URL.Host = ub.Host
-			req_b.Cancel = cancel_b
-
-			rt := &http.Transport{DisableKeepAlives: true}
-			resp, err := rt.RoundTrip(&req_b)
-			if err != nil {
-				log.Printf("target B failed: %s", err)
-				close(fail_b)
-			} else if resp.StatusCode >= 500 || resp.StatusCode == 408 {
-				log.Printf("target B unsatisfying status: %d", resp.StatusCode)
-				close(fail_b)
-			} else {
-				resp_b <- resp
-			}
-		}()
+		go forwardRequest(r, ua, resp_a, cancel_a, fail_a)
+		go forwardRequest(r, ub, resp_b, cancel_b, fail_b)
 
 		go func() {
 			<-fail_a
@@ -94,36 +83,16 @@ func main() {
 			close(fail)
 		}()
 
-		var ra *http.Response
-		var rb *http.Response
 		var resp *http.Response
-		done := false
-	OuterLoop:
-		for {
-			select {
-			case ra = <-resp_a:
-				if !done {
-					done = true
-					resp = ra
-					log.Print("close cancel_b")
-					close(cancel_b)
-					break OuterLoop
-				}
-			case rb = <-resp_b:
-				if !done {
-					done = true
-					resp = rb
-					log.Print("close cancel_a")
-					close(cancel_a)
-					break OuterLoop
-				}
-			case <-fail:
-				log.Print("both failed")
-				break OuterLoop
-			}
-		}
-
-		if !done {
+		select {
+		case resp = <-resp_a:
+			log.Print("got response from a, close cancel_b")
+			close(cancel_b)
+		case resp = <-resp_b:
+			log.Print("got response from b, close cancel_a")
+			close(cancel_a)
+		case <-fail:
+			log.Print("both failed")
 			w.WriteHeader(503)
 			return
 		}
