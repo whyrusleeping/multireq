@@ -9,9 +9,31 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 )
 
-func forwardRequest(r *http.Request, target *url.URL, out chan *http.Response, cancel chan struct{}, fail chan struct{}) {
+var bufSize = 1024 * 1024 * 16
+
+var buffers = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, bufSize)
+	},
+}
+
+func getBuffer() []byte {
+	return buffers.Get().([]byte)
+}
+
+func freeBuffer(b []byte) {
+	buffers.Put(b[:bufSize])
+}
+
+type buffResponse struct {
+	buffered []byte
+	resp     *http.Response
+}
+
+func forwardRequest(r *http.Request, target *url.URL, out chan *buffResponse, cancel chan struct{}, fail chan struct{}) {
 	req_a := *r
 	req_a.URL, _ = url.Parse(r.URL.String())
 	req_a.URL.Host = target.Host
@@ -36,7 +58,20 @@ func forwardRequest(r *http.Request, target *url.URL, out chan *http.Response, c
 		return
 	}
 
-	out <- resp
+	buf := getBuffer()
+
+	n, err := io.ReadFull(resp.Body, buf)
+	if err != nil && err != io.ErrUnexpectedEOF {
+		log.Printf("%s: read error: %s", target, err)
+		freeBuffer(buf)
+		close(fail)
+		return
+	}
+
+	out <- &buffResponse{
+		buffered: buf[:n],
+		resp:     resp,
+	}
 }
 
 type MultiReq struct {
@@ -45,8 +80,8 @@ type MultiReq struct {
 }
 
 func (mr *MultiReq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	resp_a := make(chan *http.Response)
-	resp_b := make(chan *http.Response)
+	resp_a := make(chan *buffResponse, 1)
+	resp_b := make(chan *buffResponse, 1)
 
 	fail_a := make(chan struct{})
 	fail_b := make(chan struct{})
@@ -67,13 +102,13 @@ func (mr *MultiReq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		close(fail)
 	}()
 
-	var resp *http.Response
+	var resp *buffResponse
 	select {
 	case resp = <-resp_a:
-		log.Print("got response from a, close cancel_b")
+		log.Printf("got %d response from a, close cancel_b", resp.resp.StatusCode)
 		close(cancel_b)
 	case resp = <-resp_b:
-		log.Print("got response from b, close cancel_a")
+		log.Printf("got %d response from b, close cancel_a", resp.resp.StatusCode)
 		close(cancel_a)
 	case <-fail:
 		log.Print("both failed")
@@ -81,13 +116,21 @@ func (mr *MultiReq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for k, v := range resp.Header {
+	for k, v := range resp.resp.Header {
 		w.Header()[k] = v
 	}
-	w.WriteHeader(resp.StatusCode)
+	w.WriteHeader(resp.resp.StatusCode)
 
-	defer resp.Body.Close()
-	written, err := io.Copy(w, resp.Body)
+	defer resp.resp.Body.Close()
+	defer freeBuffer(resp.buffered)
+
+	_, err := w.Write(resp.buffered)
+	if err != nil {
+		log.Printf("response.Write error: %s", err)
+		return
+	}
+
+	written, err := io.Copy(w, resp.resp.Body)
 	if err != nil {
 		log.Printf("io.Copy error: %s", err)
 	}
