@@ -62,6 +62,7 @@ func forwardRequest(r *http.Request, target *url.URL, out chan *buffResponse, ca
 	n, err := resp.Body.Read(buf)
 	if err != nil && err != io.EOF {
 		log.Printf("%s: read error: %s", target, err)
+		freeBuffer(buf)
 		close(fail)
 		return
 	}
