@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	prometheus "github.com/prometheus/client_golang/prometheus"
 )
 
 var bufSize = 1024 * 1024 * 16
@@ -137,14 +139,25 @@ func (mr *MultiReq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("io.Copy %d bytes written", written)
 }
 
+func listenAndServe(name string, addr string, h http.Handler) error {
+	log.Printf("%s listening on %s", name, addr)
+	err := http.ListenAndServe(addr, h)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	return nil
+}
+
 func main() {
-	if len(os.Args) != 4 {
-		fmt.Println("usage: multireq <listen addr> <target A> <target B>")
+	if len(os.Args) != 5 {
+		fmt.Println("usage: multireq <listen addr> <metrics addr> <target A> <target B>")
 		os.Exit(1)
 	}
 
 	listen := os.Args[1]
-	targets := os.Args[2:]
+	listenMetrics := os.Args[2]
+	targets := os.Args[3:]
 	if !strings.HasPrefix(targets[0], "http") {
 		fmt.Println("must specify http targets")
 		os.Exit(1)
@@ -168,10 +181,6 @@ func main() {
 		TargetB: ub,
 	}
 
-	log.Printf("listening on %s", listen)
-	err = http.ListenAndServe(listen, mr)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	go listenAndServe("metrics", listenMetrics, prometheus.Handler())
+	listenAndServe("multireq", listen, prometheus.InstrumentHandler("multireq", mr))
 }
