@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,7 @@ import (
 
 type response struct {
 	Code    int
-	Content string
+	Content interface{}
 	Delay   time.Duration
 }
 
@@ -22,7 +23,14 @@ func (rr *response) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(rr.Code)
-	w.Write([]byte(rr.Content))
+	switch c := rr.Content.(type) {
+	case string:
+		w.Write([]byte(c))
+	case []byte:
+		w.Write(c)
+	case io.Reader:
+		io.Copy(w, c)
+	}
 }
 
 func (rr *response) matches(hr *http.Response) error {
@@ -35,16 +43,21 @@ func (rr *response) matches(hr *http.Response) error {
 		return err
 	}
 
-	if string(data) != rr.Content {
-		return fmt.Errorf("got data of %q, but expected %q", data, rr.Content)
+	switch exp := rr.Content.(type) {
+	case string:
+		if string(data) != exp {
+			return fmt.Errorf("got data of %q, but expected %q", data, rr.Content)
+		}
+	default:
+		return fmt.Errorf("cant handle this yet")
 	}
 
 	return nil
 }
 
 type mockServer struct {
-	RespA *response
-	RespB *response
+	RespA http.Handler
+	RespB http.Handler
 
 	ServerA *httptest.Server
 	ServerB *httptest.Server
@@ -70,7 +83,7 @@ func (ms *mockServer) makeMultireq() *MultiReq {
 	}
 }
 
-func subtestResponses(t *testing.T, a, b *response, exp *response) {
+func subtestResponses(t *testing.T, a, b http.Handler, exp *response) {
 	ms := &mockServer{
 		RespA: a,
 		RespB: b,
@@ -131,4 +144,34 @@ func TestReturnsSlowerGoodResponse(t *testing.T) {
 	}
 
 	subtestResponses(t, a, b, b)
+}
+
+func TestBuffering(t *testing.T) {
+	normbufsize := bufSize
+	bufSize = 16
+	defer func() {
+		bufSize = normbufsize
+	}()
+
+	r, w := io.Pipe()
+	a := &response{
+		Code:    200,
+		Content: r,
+	}
+	b := &response{
+		Code:    200,
+		Content: "hey look! content that is longer than sixteen characters!",
+		Delay:   time.Millisecond * 100,
+	}
+
+	go func() {
+		w.Write([]byte("a few bytes"))
+		// now hang
+		time.Sleep(time.Second)
+
+		w.Close()
+	}()
+
+	subtestResponses(t, a, b, b)
+
 }
