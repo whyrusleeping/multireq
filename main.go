@@ -79,8 +79,8 @@ type MultiReq struct {
 }
 
 func (mr *MultiReq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	resp_a := make(chan *buffResponse)
-	resp_b := make(chan *buffResponse)
+	resp_a := make(chan *buffResponse, 1)
+	resp_b := make(chan *buffResponse, 1)
 
 	fail_a := make(chan struct{})
 	fail_b := make(chan struct{})
