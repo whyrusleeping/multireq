@@ -175,3 +175,28 @@ func TestBuffering(t *testing.T) {
 	subtestResponses(t, a, b, b)
 
 }
+
+func TestHeadRequest(t *testing.T) {
+	exp := &response{
+		Code:    200,
+		Content: "this content shouldn't make it through",
+	}
+	ms := &mockServer{
+		RespA: exp,
+		RespB: exp,
+	}
+	ms.Serve(t)
+
+	server := httptest.NewServer(ms.makeMultireq())
+
+	resp, err := http.Head(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exp.Content = ""
+	err = exp.matches(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
